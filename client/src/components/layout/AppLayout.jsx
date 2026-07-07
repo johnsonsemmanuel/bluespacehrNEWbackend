@@ -104,7 +104,7 @@ export default function AppLayout() {
                         key={n.id}
                         onClick={() => { if (!n.is_read) markRead(n.id) }}
                         className={`w-full text-left px-4 py-3 text-sm border-b border-gray-50 hover:bg-gray-50 transition-colors ${
-                          !n.is_read ? 'bg-deep-50/30' : ''
+                          !n.is_read ? 'bg-brand-50/30' : ''
                         }`}
                       >
                         <p className={`text-xs ${!n.is_read ? 'font-semibold text-deep-600' : 'text-gray-600'}`}>
@@ -132,7 +132,7 @@ export default function AppLayout() {
           </div>
         </header>
 
-        <main className="flex-1 p-4 lg:p-6 overflow-auto pb-24 lg:pb-6">
+        <main className="flex-1 px-4 lg:px-6 pt-14 lg:pt-6 overflow-auto pb-24 lg:pb-6">
           <Outlet />
         </main>
       </div>

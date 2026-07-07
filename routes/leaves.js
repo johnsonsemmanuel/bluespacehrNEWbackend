@@ -306,6 +306,44 @@ async function notifyLeaveSubmitted({ leaveId, employeeName, leaveTitle, start_d
   }
 }
 
+async function notifyLeaveEdited(leaveId) {
+  try {
+    const [rows] = await pool.query(
+      `SELECT l.*, e.name AS employee_name, lt.title AS leave_type_title
+       FROM leaves l
+       JOIN employees e ON l.employee_id = e.id
+       JOIN leave_types lt ON l.leave_type_id = lt.id
+       WHERE l.id = ?`,
+      [leaveId]
+    );
+    if (rows.length === 0) return;
+    const lv = rows[0];
+
+    const [managers] = await pool.query(
+      `SELECT u.id, u.email, u.name FROM users u WHERE LOWER(u.type) IN ('management','manager','company')`
+    );
+    for (const m of managers) {
+      await pool.query(
+        'INSERT INTO notifications (user_id, type, data, is_read, created_at, updated_at) VALUES (?, ?, ?, 0, NOW(), NOW())',
+        [m.id, 'leave_edited', JSON.stringify({ leaveId, employeeName: lv.employee_name, leaveType: lv.leave_type_title })]
+      );
+      await sendLeaveSubmittedNotification({
+        toEmail: m.email,
+        toName: m.name,
+        fromName: lv.employee_name,
+        leaveType: lv.leave_type_title,
+        startDate: lv.start_date,
+        endDate: lv.end_date,
+        reason: lv.leave_reason,
+        leaveId,
+        totalDays: lv.total_leave_days,
+      });
+    }
+  } catch (err) {
+    console.error('Leave edit notification error:', err);
+  }
+}
+
 function getDateRange(start, end) {
   const dates = [];
   const current = new Date(start);
@@ -471,6 +509,8 @@ router.put('/:id', authenticate, async (req, res) => {
     );
 
     res.json({ message: 'Leave updated successfully' });
+
+    notifyLeaveEdited(req.params.id);
   } catch (err) {
     console.error('Leave update error:', err);
     res.status(500).json({ error: 'Server error' });
@@ -510,7 +550,6 @@ router.put('/:id/status', authenticate, authorize('Management'), async (req, res
         remark,
         leaveId: req.params.id,
         totalDays: lv.total_leave_days,
-        remark,
       });
       console.log(`[notify] status (${status}) email to ${lv.employee_email}: ${sentStatus ? 'SENT' : 'SKIPPED/FAILED'}`);
     }
@@ -551,7 +590,12 @@ router.delete('/:id', authenticate, async (req, res) => {
 router.put('/:id/cancel', authenticate, async (req, res) => {
   try {
     const [leaves] = await pool.query(
-      'SELECT * FROM leaves WHERE id = ? AND employee_id = ?',
+      `SELECT l.*, u.email AS employee_email, u.name AS employee_email_name, u.id AS user_id, lt.title AS leave_type_name
+       FROM leaves l
+       JOIN employees e ON l.employee_id = e.id
+       JOIN users u ON e.user_id = u.id
+       JOIN leave_types lt ON l.leave_type_id = lt.id
+       WHERE l.id = ? AND l.employee_id = ?`,
       [req.params.id, req.user.employeeId]
     );
     if (leaves.length === 0) {
@@ -565,6 +609,35 @@ router.put('/:id/cancel', authenticate, async (req, res) => {
       "UPDATE leaves SET status = 'Cancelled', updated_at = NOW() WHERE id = ?",
       [req.params.id]
     );
+
+    const lv = leaves[0];
+
+    await pool.query(
+      'INSERT INTO notifications (user_id, type, data, is_read, created_at, updated_at) VALUES (?, ?, ?, 0, NOW(), NOW())',
+      [lv.user_id, 'leave_cancelled', JSON.stringify({ leaveId: req.params.id, leaveType: lv.leave_type_name })]
+    );
+
+    sendLeaveStatusNotification({
+      toEmail: lv.employee_email,
+      toName: lv.employee_email_name,
+      leaveType: lv.leave_type_name,
+      status: 'Cancelled',
+      reviewer: req.user.name,
+      startDate: lv.start_date,
+      endDate: lv.end_date,
+      leaveId: req.params.id,
+      totalDays: lv.total_leave_days,
+    }).catch(err => console.error('Cancel email to employee error (non-fatal):', err));
+
+    const [managers] = await pool.query(
+      `SELECT u.id, u.email, u.name FROM users u WHERE LOWER(u.type) IN ('management','manager','company')`
+    );
+    for (const m of managers) {
+      await pool.query(
+        'INSERT INTO notifications (user_id, type, data, is_read, created_at, updated_at) VALUES (?, ?, ?, 0, NOW(), NOW())',
+        [m.id, 'leave_cancelled', JSON.stringify({ leaveId: req.params.id, employeeName: lv.employee_email_name, leaveType: lv.leave_type_name })]
+      );
+    }
 
     res.json({ message: 'Leave cancelled successfully' });
   } catch (err) {
